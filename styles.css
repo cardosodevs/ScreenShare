@@ -161,6 +161,18 @@ img{max-width:100%}
   font-size:10px; font-weight:500; letter-spacing:.06em; text-transform:none;
   color:var(--txt-3); font-variant-numeric:tabular-nums;
 }
+.fieldCheck{gap:6px}
+.fieldCheckRow{
+  display:flex; align-items:center; gap:10px;
+  font-size:14px; line-height:1.35; color:var(--txt-2); cursor:pointer;
+}
+.fieldCheckRow input{
+  width:16px; height:16px; margin:0; accent-color:var(--amber);
+  cursor:pointer; flex-shrink:0;
+}
+.fieldHint{
+  font-size:12px; line-height:1.45; color:var(--txt-3);
+}
 input[type=text],input:not([type]),input[type=password],.codeInput{
   width:100%; height:44px;
   background:var(--ink-850); border:1px solid var(--line); color:var(--txt);

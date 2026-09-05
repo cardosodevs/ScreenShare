@@ -1043,13 +1043,43 @@ function closePeer(uid) {
     S.remoteStreams.delete(uid);
   }
 }
+function shareAudioEnabled() {
+  const el = $('#shareAudio');
+  if (!el) return localStorage.rise_share_audio !== '0';
+  return el.checked;
+}
+function isAudioCaptureError(e) {
+  if (!e || e.name === 'NotAllowedError' || e.name === 'AbortError') return false;
+  const msg = String(e.message || e.name || '').toLowerCase();
+  return msg.includes('audio');
+}
+function displayMediaOpts(withAudio) {
+  const q = $('#quality').value, fps = Number($('#fps').value) || 60;
+  const h = q === '1080' ? 1080 : q === '720' ? 720 : 1080;
+  return {
+    video: { height: { ideal: h }, frameRate: { ideal: fps, max: fps } },
+    audio: withAudio
+  };
+}
+async function captureDisplayStream() {
+  const wantAudio = shareAudioEnabled();
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts(wantAudio));
+    return { stream, audioFallback: false };
+  } catch (e) {
+    if (!wantAudio || !isAudioCaptureError(e)) throw e;
+    console.warn('Rise: áudio indisponível, tentando só vídeo', e);
+    const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts(false));
+    return { stream, audioFallback: true };
+  }
+}
 async function startShare() {
   if (!S.host && !S.shareAllowed) return toast('O host ainda não liberou sua transmissão');
   if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) return toast('A telagem precisa abrir em HTTPS para compartilhar a tela');
   try {
     if (S.stream) await stopShare(true);
-    const q = $('#quality').value, fps = Number($('#fps').value) || 60; const h = q === '1080' ? 1080 : q === '720' ? 720 : 1080;
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: { height: { ideal: h }, frameRate: { ideal: fps, max: fps } }, audio: true });
+    const q = $('#quality').value, fps = Number($('#fps').value) || 60;
+    const { stream, audioFallback } = await captureDisplayStream();
     const vt = stream.getVideoTracks()[0]; if (!vt) throw new Error('Nenhuma tela foi selecionada');
     vt.contentHint = 'detail';
     vt.onended = () => stopShare();
@@ -1074,7 +1104,9 @@ async function startShare() {
     send(null, 'stream-available', { name: S.name });
     setTimeout(() => send(null, 'stream-available', { name: S.name }), 800);
     if (S.host) { await hostAction('status', 'live'); broadcastControl('room-state', { status: 'live' }); }
-    toast('Transmissão iniciada');
+    if (audioFallback) toast('Áudio indisponível — transmitindo só vídeo');
+    else if (stream.getAudioTracks().length) toast('Transmissão iniciada com áudio');
+    else toast('Transmissão iniciada');
   } catch (e) { console.error('Rise getDisplayMedia', e); if (e.name === 'NotAllowedError') toast('Compartilhamento cancelado'); else toast('Não foi possível iniciar a telagem: ' + (e.message || 'erro do navegador')); }
 }
 function showLocal() { updateStageView(S.uid); }
@@ -1355,6 +1387,11 @@ try {
   const elScrim = $('#peopleScrim'); if (elScrim) elScrim.onclick = () => { togglePeople(false); toggleTools(false); };
   const elModalClose = $('#modalClose'); if (elModalClose) elModalClose.onclick = closeModal;
   const elJoinMode = $('#joinMode'); if (elJoinMode) elJoinMode.onchange = e => { S.role = e.target.value; track(); setRoomUI(); };
+  const elShareAudio = $('#shareAudio');
+  if (elShareAudio) {
+    elShareAudio.checked = localStorage.rise_share_audio !== '0';
+    elShareAudio.onchange = e => { localStorage.rise_share_audio = e.target.checked ? '1' : '0'; };
+  }
   $$('.tabs button').forEach(b => b.onclick = () => { $$('.tabs button').forEach(x => x.classList.remove('active')); b.classList.add('active'); $$('.tab').forEach(x => x.classList.remove('show')); const tabEl = $('#' + b.dataset.tab + 'Tab'); if (tabEl) tabEl.classList.add('show'); if (b.dataset.tab === 'logs') loadLogs(); });
 } catch (e) { console.warn('wiring fail', e); }
 window.addEventListener('beforeunload', () => { S.stream?.getTracks().forEach(t => t.stop()); });
