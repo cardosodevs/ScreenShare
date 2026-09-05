@@ -1053,25 +1053,65 @@ function isAudioCaptureError(e) {
   const msg = String(e.message || e.name || '').toLowerCase();
   return msg.includes('audio');
 }
-function displayMediaOpts(withAudio) {
+function displayMediaOpts(profile) {
   const q = $('#quality').value, fps = Number($('#fps').value) || 60;
   const h = q === '1080' ? 1080 : q === '720' ? 720 : 1080;
+  const base = { video: { height: { ideal: h }, frameRate: { ideal: fps, max: fps } } };
+  if (profile === 'video') return { ...base, audio: false };
+  if (profile === 'basic') return { ...base, audio: true };
   return {
-    video: { height: { ideal: h }, frameRate: { ideal: fps, max: fps } },
-    audio: withAudio
+    ...base,
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      suppressLocalAudioPlayback: false
+    },
+    systemAudio: 'include',
+    windowAudio: 'system'
   };
+}
+function isRetryableCaptureError(e, profile) {
+  if (!e || e.name === 'NotAllowedError' || e.name === 'AbortError') return false;
+  if (profile === 'enhanced' && e.name === 'TypeError') return true;
+  return isAudioCaptureError(e);
+}
+function shareAudioHint(surface) {
+  if (surface === 'window') {
+    return 'Janela sem áudio — use aba do navegador ou tela inteira com áudio do sistema';
+  }
+  if (surface === 'monitor') {
+    return 'Tela sem áudio — ligue "Compartilhar áudio do sistema" no popup do navegador';
+  }
+  return 'Áudio indisponível — transmitindo só vídeo';
 }
 async function captureDisplayStream() {
   const wantAudio = shareAudioEnabled();
-  try {
-    const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts(wantAudio));
+  if (!wantAudio) {
+    const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts('video'));
     return { stream, audioFallback: false };
-  } catch (e) {
-    if (!wantAudio || !isAudioCaptureError(e)) throw e;
-    console.warn('Rise: áudio indisponível, tentando só vídeo', e);
-    const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts(false));
-    return { stream, audioFallback: true };
   }
+
+  const attempts = ['enhanced', 'basic'];
+  let lastError;
+  for (const profile of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts(profile));
+      const surface = stream.getVideoTracks()[0]?.getSettings?.()?.displaySurface;
+      if (stream.getAudioTracks().length) return { stream, audioFallback: false };
+      return { stream, audioFallback: true, surface };
+    } catch (e) {
+      lastError = e;
+      if (e.name === 'NotAllowedError' || e.name === 'AbortError') throw e;
+      if (!isRetryableCaptureError(e, profile)) throw e;
+      console.warn('Rise: captura ' + profile + ' falhou', e);
+    }
+  }
+
+  console.warn('Rise: áudio indisponível, tentando só vídeo', lastError);
+  const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts('video'));
+  const surface = stream.getVideoTracks()[0]?.getSettings?.()?.displaySurface;
+  return { stream, audioFallback: true, surface };
 }
 async function startShare() {
   if (!S.host && !S.shareAllowed) return toast('O host ainda não liberou sua transmissão');
@@ -1079,7 +1119,7 @@ async function startShare() {
   try {
     if (S.stream) await stopShare(true);
     const q = $('#quality').value, fps = Number($('#fps').value) || 60;
-    const { stream, audioFallback } = await captureDisplayStream();
+    const { stream, audioFallback, surface } = await captureDisplayStream();
     const vt = stream.getVideoTracks()[0]; if (!vt) throw new Error('Nenhuma tela foi selecionada');
     vt.contentHint = 'detail';
     vt.onended = () => stopShare();
@@ -1104,7 +1144,7 @@ async function startShare() {
     send(null, 'stream-available', { name: S.name });
     setTimeout(() => send(null, 'stream-available', { name: S.name }), 800);
     if (S.host) { await hostAction('status', 'live'); broadcastControl('room-state', { status: 'live' }); }
-    if (audioFallback) toast('Áudio indisponível — transmitindo só vídeo');
+    if (audioFallback) toast(shareAudioHint(surface));
     else if (stream.getAudioTracks().length) toast('Transmissão iniciada com áudio');
     else toast('Transmissão iniciada');
   } catch (e) { console.error('Rise getDisplayMedia', e); if (e.name === 'NotAllowedError') toast('Compartilhamento cancelado'); else toast('Não foi possível iniciar a telagem: ' + (e.message || 'erro do navegador')); }
