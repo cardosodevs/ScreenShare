@@ -17,6 +17,7 @@ const S = {
   channel: null,
   presence: {},
   stream: null,
+  shareHasAudio: false,
   peers: new Map(),
   remoteStreams: new Map(),
   zoom: 1,
@@ -514,22 +515,11 @@ function attachTileVideos(grid) {
   grid.querySelectorAll('[data-tile-video]').forEach(vid => {
     const uid = vid.dataset.tileVideo;
     const stream = tileStreamFor(uid);
-    // #region agent log
-    fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:attachTileVideos',message:'tile attach',data:{uid,hasStream:!!stream,srcObjectIsNull:vid.srcObject===null,srcObjectMatches:vid.srcObject===stream,videoW:vid.videoWidth,videoH:vid.videoH},timestamp:Date.now(),runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
-    // #endregion
     if (stream && vid.srcObject !== stream) {
       vid.srcObject = stream;
       vid.muted = true;
       vid.playsInline = true;
-      vid.play().then(() => {
-        // #region agent log
-        fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:attachTileVideos',message:'play ok',data:{uid,videoW:vid.videoWidth,videoH:vid.videoHeight},timestamp:Date.now(),runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-        // #endregion
-      }).catch(err => {
-        // #region agent log
-        fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:attachTileVideos',message:'play FAIL',data:{uid,err:String(err)},timestamp:Date.now(),runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-        // #endregion
-      });
+      vid.play().catch(err => console.warn('tile play', uid, err));
     } else if (!stream) {
       vid.srcObject = null;
     }
@@ -565,9 +555,6 @@ function renderTileGrid() {
   }
 
   const sig = tileSignature(ps, activeUid);
-  // #region agent log
-  fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:renderTileGrid',message:'sig check',data:{oldSig:grid.dataset.sig||'',newSig:sig,selfHasStream:!!tileStreamFor(S.uid),selfSharing:ps.find(p=>p.userId===S.uid)?.sharing||false,psCount:ps.length},timestamp:Date.now(),runId:'run1',hypothesisId:'H4'})}).catch(()=>{});
-  // #endregion
   if (grid.dataset.sig === sig) {
     attachTileVideos(grid);
     return;
@@ -868,9 +855,6 @@ async function peer(uid, offerer = false) {
       }
     };
     pc.ontrack = e => {
-      // #region agent log
-      fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:ontrack',message:'remote track',data:{uid,kind:e.track.kind,readyState:e.track.readyState,muted:e.track.muted,hasIncomingStream:!!e.streams?.[0],trackId:e.track.id},timestamp:Date.now(),runId:'run1',hypothesisId:'H8'})}).catch(()=>{});
-      // #endregion
       let st = S.remoteStreams.get(uid);
       const incomingStream = e.streams?.[0];
       if (!st) {
@@ -958,14 +942,8 @@ async function signal(p) {
         send(p.from, 'stream-available', { name: S.name });
       }
     } else if (p.type === 'stream-available') {
-      // #region agent log
-      fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:signal',message:'stream-available recv',data:{from:p.from,hasOld:!!S.peers.get(p.from),oldConnState:S.peers.get(p.from)?.connectionState||null,oldSigState:S.peers.get(p.from)?.signalingState||null,hasRemoteStream:S.remoteStreams.has(p.from)},timestamp:Date.now(),runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-      // #endregion
       const old = S.peers.get(p.from);
       if (old && S.remoteStreams.has(p.from) && ['connected', 'connecting'].includes(old.connectionState)) {
-        // #region agent log
-        fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:signal',message:'stream-available SKIPPED (already connected)',data:{from:p.from},timestamp:Date.now(),runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-        // #endregion
         return;
       }
       if (old && old.signalingState !== 'stable') {
@@ -1053,53 +1031,164 @@ function isAudioCaptureError(e) {
   const msg = String(e.message || e.name || '').toLowerCase();
   return msg.includes('audio');
 }
+function captureSurface(stream) {
+  return stream.getVideoTracks()[0]?.getSettings?.()?.displaySurface || '';
+}
+function hasCapturableAudio(stream) {
+  return stream.getAudioTracks().some(t => t.readyState === 'live' && t.enabled);
+}
+function waitForAudioTrack(stream, ms = 2800) {
+  if (hasCapturableAudio(stream)) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(hasCapturableAudio(stream));
+    };
+    const onAdd = e => { if (e.track?.kind === 'audio') finish(); };
+    const unmuteHandlers = [];
+    for (const t of stream.getAudioTracks()) {
+      const h = () => finish();
+      unmuteHandlers.push([t, h]);
+      t.addEventListener('unmute', h);
+    }
+    stream.addEventListener('addtrack', onAdd);
+    const timer = setTimeout(finish, ms);
+    function cleanup() {
+      clearTimeout(timer);
+      stream.removeEventListener('addtrack', onAdd);
+      for (const [t, h] of unmuteHandlers) t.removeEventListener('unmute', h);
+    }
+  });
+}
 function displayMediaOpts(profile) {
   const q = $('#quality').value, fps = Number($('#fps').value) || 60;
   const h = q === '1080' ? 1080 : q === '720' ? 720 : 1080;
-  const base = { video: { height: { ideal: h }, frameRate: { ideal: fps, max: fps } } };
-  if (profile === 'video') return { ...base, audio: false };
-  if (profile === 'basic') return { ...base, audio: true };
-  return {
-    ...base,
-    audio: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      suppressLocalAudioPlayback: false
-    },
-    systemAudio: 'include',
-    windowAudio: 'system'
+  const baseVideo = { height: { ideal: h }, frameRate: { ideal: fps, max: fps } };
+  if (profile === 'video') return { video: baseVideo, audio: false };
+  const audio = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    suppressLocalAudioPlayback: false
   };
+  if (profile === 'monitor') {
+    return { video: { ...baseVideo, displaySurface: 'monitor' }, audio, systemAudio: 'include' };
+  }
+  if (profile === 'window') {
+    return { video: baseVideo, audio, windowAudio: 'system', systemAudio: 'include' };
+  }
+  if (profile === 'basic') {
+    return { video: baseVideo, audio, systemAudio: 'include', windowAudio: 'system' };
+  }
+  return { video: baseVideo, audio, systemAudio: 'include', windowAudio: 'system' };
+}
+function captureProfiles(mode) {
+  if (mode === 'monitor') return ['monitor', 'enhanced', 'basic'];
+  if (mode === 'window') return ['window', 'enhanced', 'basic'];
+  return ['enhanced', 'window', 'monitor', 'basic'];
 }
 function isRetryableCaptureError(e, profile) {
   if (!e || e.name === 'NotAllowedError' || e.name === 'AbortError') return false;
-  if (profile === 'enhanced' && e.name === 'TypeError') return true;
+  if (e.name === 'TypeError') return true;
+  if (e.name === 'OverconstrainedError') return profile === 'monitor' || profile === 'window';
   return isAudioCaptureError(e);
 }
 function shareAudioHint(surface) {
   if (surface === 'window') {
-    return 'Janela sem áudio — use aba do navegador ou tela inteira com áudio do sistema';
+    return 'Janela sem áudio — escolha tela inteira e marque "Compartilhar áudio do sistema" no popup';
   }
   if (surface === 'monitor') {
-    return 'Tela sem áudio — ligue "Compartilhar áudio do sistema" no popup do navegador';
+    return 'Tela sem áudio — marque "Compartilhar áudio do sistema" no popup do Chrome/Edge';
   }
   return 'Áudio indisponível — transmitindo só vídeo';
 }
-async function captureDisplayStream() {
+function ensureShareAudioGuide() {
+  if (!shareAudioEnabled() || localStorage.rise_audio_guide === '1') return Promise.resolve();
+  return new Promise(resolve => {
+    const body = document.createElement('div');
+    body.innerHTML = [
+      '<h2>Compartilhar com áudio</h2>',
+      '<p><strong>Tela inteira:</strong> escolha o monitor e marque <strong>Compartilhar áudio do sistema</strong> no popup do navegador.</p>',
+      '<p><strong>Janela de aplicativo:</strong> se o popup tiver opção de áudio, ligue-a. Caso contrário, volte e use <strong>tela inteira</strong>.</p>',
+      '<p><strong>Aba do navegador:</strong> o áudio da aba costuma funcionar automaticamente.</p>',
+      '<p class="toolsHint">Use Chrome ou Edge atualizado no Windows.</p>'
+    ].join('');
+    const actions = document.createElement('div');
+    actions.className = 'modalActions';
+    const btn = document.createElement('button');
+    btn.className = 'btn btnPrimary';
+    btn.type = 'button';
+    btn.textContent = 'Entendi, continuar';
+    btn.onclick = () => { localStorage.rise_audio_guide = '1'; closeModal(); resolve(); };
+    actions.appendChild(btn);
+    body.appendChild(actions);
+    openModal(body);
+  });
+}
+function promptAudioRetry(surface) {
+  return new Promise(resolve => {
+    const isWindow = surface === 'window';
+    const isMonitor = surface === 'monitor';
+    const msg = isWindow
+      ? 'O navegador não capturou áudio desta janela. Para transmitir o som do aplicativo, compartilhe a tela inteira e marque "Compartilhar áudio do sistema" no popup.'
+      : isMonitor
+        ? 'Áudio do sistema não foi detectado. No popup do Chrome/Edge, marque "Compartilhar áudio do sistema" antes de confirmar.'
+        : 'Nenhuma faixa de áudio foi capturada. Tente novamente escolhendo tela inteira com áudio do sistema ligado no popup.';
+    const body = document.createElement('div');
+    body.innerHTML = `<h2>Áudio não detectado</h2><p>${esc(msg)}</p>`;
+    const actions = document.createElement('div');
+    actions.className = 'modalActions';
+    const retry = document.createElement('button');
+    retry.className = 'btn btnPrimary';
+    retry.type = 'button';
+    retry.textContent = isWindow ? 'Usar tela inteira com áudio' : 'Tentar novamente';
+    retry.onclick = () => { closeModal(); resolve(isWindow ? 'monitor' : 'retry'); };
+    const videoOnly = document.createElement('button');
+    videoOnly.className = 'btn btnGhost';
+    videoOnly.type = 'button';
+    videoOnly.textContent = 'Continuar só com vídeo';
+    videoOnly.onclick = () => { closeModal(); resolve('video'); };
+    const cancel = document.createElement('button');
+    cancel.className = 'btn btnQuiet';
+    cancel.type = 'button';
+    cancel.textContent = 'Cancelar';
+    cancel.onclick = () => { closeModal(); resolve('cancel'); };
+    actions.append(retry, videoOnly, cancel);
+    body.appendChild(actions);
+    openModal(body);
+  });
+}
+function syncShareAudioBadge() {
+  const lb = $('#liveBadge');
+  if (!lb || !S.stream) return;
+  const ln = nameOf(S.uid) || S.name || 'transmitindo';
+  if (shareAudioEnabled() && !S.shareHasAudio) {
+    lb.innerHTML = `Ao vivo · <span id="liveName">${esc(ln)}</span> · <span class="audioWarn">sem áudio</span>`;
+  } else if (S.shareHasAudio) {
+    lb.innerHTML = `Ao vivo · <span id="liveName">${esc(ln)}</span> · <span class="audioOk">com áudio</span>`;
+  }
+}
+async function captureDisplayStream(mode = 'auto') {
   const wantAudio = shareAudioEnabled();
   if (!wantAudio) {
     const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts('video'));
-    return { stream, audioFallback: false };
+    return { stream, hasAudio: false, surface: captureSurface(stream) };
   }
 
-  const attempts = ['enhanced', 'basic'];
+  const profiles = captureProfiles(mode);
   let lastError;
-  for (const profile of attempts) {
+  for (const profile of profiles) {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts(profile));
-      const surface = stream.getVideoTracks()[0]?.getSettings?.()?.displaySurface;
-      if (stream.getAudioTracks().length) return { stream, audioFallback: false };
-      return { stream, audioFallback: true, surface };
+      await waitForAudioTrack(stream);
+      return {
+        stream,
+        hasAudio: hasCapturableAudio(stream),
+        surface: captureSurface(stream)
+      };
     } catch (e) {
       lastError = e;
       if (e.name === 'NotAllowedError' || e.name === 'AbortError') throw e;
@@ -1108,25 +1197,36 @@ async function captureDisplayStream() {
     }
   }
 
-  console.warn('Rise: áudio indisponível, tentando só vídeo', lastError);
+  console.warn('Rise: perfis com áudio falharam, tentando só vídeo', lastError);
   const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOpts('video'));
-  const surface = stream.getVideoTracks()[0]?.getSettings?.()?.displaySurface;
-  return { stream, audioFallback: true, surface };
+  return { stream, hasAudio: false, surface: captureSurface(stream) };
 }
 async function startShare() {
   if (!S.host && !S.shareAllowed) return toast('O host ainda não liberou sua transmissão');
   if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) return toast('A telagem precisa abrir em HTTPS para compartilhar a tela');
   try {
     if (S.stream) await stopShare(true);
+    await ensureShareAudioGuide();
     const q = $('#quality').value, fps = Number($('#fps').value) || 60;
-    const { stream, audioFallback, surface } = await captureDisplayStream();
+    let captureMode = 'auto';
+    let stream, hasAudio, surface;
+    while (true) {
+      ({ stream, hasAudio, surface } = await captureDisplayStream(captureMode));
+      if (!shareAudioEnabled() || hasAudio) break;
+      const choice = await promptAudioRetry(surface);
+      if (choice === 'cancel') {
+        stream.getTracks().forEach(t => { try { t.stop(); } catch { } });
+        return;
+      }
+      if (choice === 'video') break;
+      stream.getTracks().forEach(t => { try { t.stop(); } catch { } });
+      captureMode = choice === 'monitor' ? 'monitor' : 'auto';
+    }
     const vt = stream.getVideoTracks()[0]; if (!vt) throw new Error('Nenhuma tela foi selecionada');
     vt.contentHint = 'detail';
     vt.onended = () => stopShare();
     S.stream = stream;
-    // #region agent log
-    fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:startShare',message:'S.stream set',data:{hasStream:!!S.stream,videoTracks:S.stream.getVideoTracks().map(t=>({id:t.id,readyState:t.readyState,muted:t.muted,enabled:t.enabled,label:t.label})),audioTracks:S.stream.getAudioTracks().length},timestamp:Date.now(),runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
+    S.shareHasAudio = hasCapturableAudio(stream);
     // Força o tile de preview local a recriar e anexar o <video> imediatamente,
     // sem esperar o sync de presença (p.sharing ainda pode estar false aqui).
     const grid0 = $('#tileGrid');
@@ -1144,13 +1244,39 @@ async function startShare() {
     send(null, 'stream-available', { name: S.name });
     setTimeout(() => send(null, 'stream-available', { name: S.name }), 800);
     if (S.host) { await hostAction('status', 'live'); broadcastControl('room-state', { status: 'live' }); }
-    if (audioFallback) toast(shareAudioHint(surface));
-    else if (stream.getAudioTracks().length) toast('Transmissão iniciada com áudio');
+    syncShareAudioBadge();
+    if (shareAudioEnabled() && !S.shareHasAudio) toast(shareAudioHint(surface));
+    else if (S.shareHasAudio) toast('Transmissão iniciada com áudio');
     else toast('Transmissão iniciada');
   } catch (e) { console.error('Rise getDisplayMedia', e); if (e.name === 'NotAllowedError') toast('Compartilhamento cancelado'); else toast('Não foi possível iniciar a telagem: ' + (e.message || 'erro do navegador')); }
 }
 function showLocal() { updateStageView(S.uid); }
 function showStream(uid) { updateStageView(uid); }
+async function playMainVideo(main) {
+  const unmuteBtn = $('#unmuteVideo');
+  main.muted = false;
+  main.playsInline = true;
+  main.autoplay = true;
+  if (unmuteBtn) unmuteBtn.classList.add('hidden');
+  try {
+    await main.play();
+  } catch {
+    main.muted = true;
+    try { await main.play(); } catch { }
+    if (unmuteBtn) unmuteBtn.classList.remove('hidden');
+    toast('Clique em "Ativar áudio" se não ouvir som');
+  }
+}
+function activateMainAudio() {
+  const main = $('#video');
+  const unmuteBtn = $('#unmuteVideo');
+  if (!main?.srcObject) return;
+  main.muted = false;
+  main.play().then(() => {
+    if (unmuteBtn) unmuteBtn.classList.add('hidden');
+    toast('Áudio ativado');
+  }).catch(() => toast('Não foi possível ativar o áudio'));
+}
 
 function updateStageView(preferredUid) {
   const stage = $('#stage');
@@ -1183,28 +1309,12 @@ function updateStageView(preferredUid) {
   }
 
   if (remoteStream && main) {
-    // #region agent log
-    fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:updateStageView',message:'branch REMOTE',data:{watchUid,remoteStreamId:remoteStream.id,videoTracks:remoteStream.getVideoTracks().length,mainSrcObjectIsNull:main.srcObject===null,mainDisplay:main.style.display},timestamp:Date.now(),runId:'run1',hypothesisId:'H9'})}).catch(()=>{});
-    // #endregion
     stage.classList.remove('presentingOnly', 'galleryMode');
     if (empty) empty.style.display = 'none';
     if (presenting) presenting.style.display = 'none';
     if (main.srcObject !== remoteStream) {
       main.srcObject = remoteStream;
-      main.muted = false;
-      main.playsInline = true;
-      main.autoplay = true;
-      main.play().then(() => {
-      // #region agent log
-      fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:updateStageView',message:'main play ok',data:{watchUid,videoW:main.videoWidth,videoH:main.videoHeight,muted:main.muted},timestamp:Date.now(),runId:'run1',hypothesisId:'H10'})}).catch(()=>{});
-      // #endregion
-    }).catch(err => {
-      main.muted = true;
-      main.play().catch(() => { });
-      // #region agent log
-      fetch('http://127.0.0.1:7647/ingest/e257b8b0-203e-46a2-b2e6-82b916c76ec7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9b9cf'},body:JSON.stringify({sessionId:'e9b9cf',location:'app.js:updateStageView',message:'main play FAIL',data:{watchUid,err:String(err)},timestamp:Date.now(),runId:'run1',hypothesisId:'H10'})}).catch(()=>{});
-      // #endregion
-    });
+      playMainVideo(main);
     }
     main.style.display = 'block';
     if (sel && watchUid) sel.value = watchUid;
@@ -1253,6 +1363,7 @@ async function stopShare(silent = false) {
   if (!S.stream) return;
   const oldStream = S.stream;
   S.stream = null;
+  S.shareHasAudio = false;
   send(null, 'stream-stopped', {});
   for (const [uid, pc] of [...S.peers.entries()]) {
     try {
@@ -1380,6 +1491,10 @@ function syncFullscreenUI() {
   const app = $('#app');
   const btn = $('#fullscreen');
   if (app) app.classList.toggle('isFullscreen', on);
+  if (on) {
+    const main = $('#video');
+    if (main?.srcObject) playMainVideo(main);
+  }
   if (btn) {
     btn.classList.toggle('ctrlActive', on);
     btn.title = on ? 'Sair da tela cheia (Esc)' : 'Tela cheia';
@@ -1422,6 +1537,8 @@ try {
   const elZoomIn = $('#zoomIn'); if (elZoomIn) elZoomIn.onclick = () => { S.zoom = Math.min(2, S.zoom + .1); const v = $('#video'); if (v) v.style.transform = `scale(${S.zoom})`; };
   const elZoomOut = $('#zoomOut'); if (elZoomOut) elZoomOut.onclick = () => { S.zoom = Math.max(.5, S.zoom - .1); const v = $('#video'); if (v) v.style.transform = `scale(${S.zoom})`; };
   const elFs = $('#fullscreen'); if (elFs) elFs.onclick = () => toggleFullscreen();
+  const elUnmute = $('#unmuteVideo'); if (elUnmute) elUnmute.onclick = activateMainAudio;
+  const elVideo = $('#video'); if (elVideo) elVideo.onclick = () => { if (elVideo.muted) activateMainAudio(); };
   const elTogglePeople = $('#togglePeople'); if (elTogglePeople) elTogglePeople.onclick = () => togglePeople();
   const elClosePeople = $('#closePeople'); if (elClosePeople) elClosePeople.onclick = () => togglePeople(false);
   const elScrim = $('#peopleScrim'); if (elScrim) elScrim.onclick = () => { togglePeople(false); toggleTools(false); };

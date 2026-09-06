@@ -86,6 +86,7 @@
         </div>
 
         <video id="video" autoplay playsinline></video>
+        <button id="unmuteVideo" class="unmuteBtn hidden" type="button">Ativar áudio</button>
 
         <div id="presentingStage" class="stageState stateSharing">
           <div class="stateIcon" aria-hidden="true">
@@ -187,10 +188,10 @@
       </label>
       <label class="field fieldCheck">
         <span class="fieldCheckRow">
-          <input id="shareAudio" type="checkbox">
+          <input id="shareAudio" type="checkbox" checked>
           <span>Incluir áudio do sistema</span>
         </span>
-        <span class="fieldHint">Tela inteira: ligue o áudio no popup do navegador. Janela no Windows quase não tem áudio — prefira aba. Use Chrome/Edge atualizado.</span>
+        <span class="fieldHint">Tela inteira: marque "Compartilhar áudio do sistema" no popup. Janela: se não houver áudio, o app pede para usar tela inteira. Chrome/Edge no Windows.</span>
       </label>
       <label class="field">
         <span class="fieldLabel">Modo de entrada</span>
@@ -232,6 +233,6 @@
 <script charset="utf-8" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4"></script>
 <script charset="utf-8" src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script charset="utf-8" src="config.js?v=3"></script>
-<script charset="utf-8" src="app.js?v=17"></script>
+<script charset="utf-8" src="app.js?v=18"></script>
 </body>
 </html>
